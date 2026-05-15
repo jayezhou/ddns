@@ -1,0 +1,5 @@
+alibabacloud_alidns20150109<3.0.0,>=2.0.1
+alibabacloud_tea_util<1.0.0,>=0.3.3
+alibabacloud_darabonba_env<1.0.0,>=0.0.1
+alibabacloud_tea_openapi<1.0.0,>=0.2.0
+alibabacloud_tea_console<1.0.0,>=0.0.1
