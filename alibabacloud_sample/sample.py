@@ -224,3 +224,4 @@ if __name__ == '__main__':
         'A'               # record_type
     ]
     Sample.main(args)
+    sys.exit(0)
