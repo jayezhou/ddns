@@ -69,7 +69,8 @@ class Sample:
         优先返回稳定地址，跳过 Windows 的"临时/Temporary"（RFC4941 隐私地址，
         会周期性轮换，不应作为 DDNS 上报目标）；没有稳定地址时退而求其次返回
         任一全局地址。参数 windows 区分两种输出格式：
-        - Windows netsh：每行首列为地址类型（公用/临时/...），末列为地址本体；
+        - Windows netsh：末列为地址本体，地址类型（公用/临时/...）不固定在第几列，
+          通过扫描行内 token 识别临时地址；
         - Linux `ip -6 addr`：地址为行内 token，行内 flags 含 temporary 即隐私地址。
         """
         fallback: Optional[str] = None
@@ -77,11 +78,12 @@ class Sample:
             tokens = line.split()
             if not tokens:
                 continue
-            address_type = tokens[0].lower() if windows else ''
             # netsh 末列是地址本体；Linux 则在整个行内找地址
             candidates = [tokens[-1]] if windows else tokens
+            # netsh 的列布局随 Windows 版本/语言而变（有的首列是接口名，有的首列才是
+            # 地址类型），所以不依赖列位置，在行内扫描"临时/Temporary"类型词即可
             is_temporary = (
-                address_type in ('临时', 'temporary')
+                any(t.lower() in ('临时', 'temporary') for t in tokens)
                 if windows else
                 'temporary' in tokens
             )
