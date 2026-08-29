@@ -123,18 +123,25 @@ class Sample:
             ['ip', '-6', 'addr']
         )
         try:
-            output = subprocess.run(
+            raw = subprocess.run(
                 cmd,
                 capture_output=True,
-                text=True,
-                # netsh 输出编码不一定是 GBK（可能是 UTF-8/OEM 码页），
-                # 用 errors='replace' 容忍不可解码字节，避免 Windows 下解码崩溃
-                errors='replace',
                 timeout=5,
             ).stdout
         except Exception as error:
             ConsoleClient.log(f'执行 {" ".join(cmd)} 失败：{error}')
             return None
+        # netsh 输出编码随系统设置而变（中文 Windows 为 GBK，开启了 UTF-8 模式则为
+        # UTF-8）。必须按正确编码解码，否则"临时/公用"等地址类型词会变成乱码，
+        # 导致 _select_global_ipv6 识别不了临时地址。按序尝试 UTF-8、GBK。
+        for encoding in ('utf-8', 'gbk'):
+            try:
+                output = raw.decode(encoding)
+                break
+            except UnicodeDecodeError:
+                continue
+        else:
+            output = raw.decode('utf-8', errors='replace')
         return Sample._select_global_ipv6(output, windows)
 
     @staticmethod
