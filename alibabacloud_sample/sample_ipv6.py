@@ -62,19 +62,64 @@ class Sample:
             return None
 
     @staticmethod
+    def _select_global_ipv6(output: str, windows: bool) -> Optional[str]:
+        """
+        从网卡命令输出中挑选全局公网 IPv6 地址。
+
+        优先返回稳定地址，跳过 Windows 的"临时/Temporary"（RFC4941 隐私地址，
+        会周期性轮换，不应作为 DDNS 上报目标）；没有稳定地址时退而求其次返回
+        任一全局地址。参数 windows 区分两种输出格式：
+        - Windows netsh：每行首列为地址类型（公用/临时/...），末列为地址本体；
+        - Linux `ip -6 addr`：地址为行内 token，行内 flags 含 temporary 即隐私地址。
+        """
+        fallback: Optional[str] = None
+        for line in output.splitlines():
+            tokens = line.split()
+            if not tokens:
+                continue
+            address_type = tokens[0].lower() if windows else ''
+            # netsh 末列是地址本体；Linux 则在整个行内找地址
+            candidates = [tokens[-1]] if windows else tokens
+            is_temporary = (
+                address_type in ('临时', 'temporary')
+                if windows else
+                'temporary' in tokens
+            )
+            for token in candidates:
+                # 去掉 /前缀 与 %iface 后缀后尝试解析为 IPv6
+                address = token.split('/', 1)[0].split('%', 1)[0]
+                normalized = Sample.normalize_ipv6(address)
+                if normalized is None:
+                    continue
+                try:
+                    if not ipaddress.IPv6Address(normalized).is_global:
+                        continue
+                except Exception:
+                    continue
+                # 先记下任意全局地址作为兜底，临时地址跳过，稳定地址直接返回
+                if fallback is None:
+                    fallback = normalized
+                if is_temporary:
+                    continue
+                return normalized
+        return fallback
+
+    @staticmethod
     def get_local_public_ipv6() -> Optional[str]:
         """
         从本机网卡读取全局公网 IPv6 地址（跨平台）。
 
         Linux 用 `ip -6 addr`，Windows 用 `netsh interface ipv6 show addresses`。
-        从输出中逐 token 提取 IPv6 地址文本（去掉 /前缀 与 %iface 后缀），
-        再用 ipaddress.is_global 过滤，排除回环/链路本地/ULA 等非公网地址。
-        取到任一合法全局地址即返回；读取失败或没有全局地址则返回 None。
+        交给 _select_global_ipv6 挑选：优先稳定公网地址，跳过会周期性轮换的
+        临时地址（RFC4941 隐私地址），排除回环/链路本地/ULA 等非公网地址。
+        读取失败或没有全局地址则返回 None。
         """
-        if sys.platform.startswith('win'):
-            cmd = ['netsh', 'interface', 'ipv6', 'show', 'addresses']
-        else:
-            cmd = ['ip', '-6', 'addr']
+        windows = sys.platform.startswith('win')
+        cmd = (
+            ['netsh', 'interface', 'ipv6', 'show', 'addresses']
+            if windows else
+            ['ip', '-6', 'addr']
+        )
         try:
             output = subprocess.run(
                 cmd,
@@ -88,20 +133,7 @@ class Sample:
         except Exception as error:
             ConsoleClient.log(f'执行 {" ".join(cmd)} 失败：{error}')
             return None
-
-        for line in output.splitlines():
-            for token in line.split():
-                # 去掉 /prefix 与 %iface 后缀后尝试解析为 IPv6
-                address = token.split('/', 1)[0].split('%', 1)[0]
-                normalized = Sample.normalize_ipv6(address)
-                if normalized is None:
-                    continue
-                try:
-                    if ipaddress.IPv6Address(normalized).is_global:
-                        return normalized
-                except Exception:
-                    continue
-        return None
+        return Sample._select_global_ipv6(output, windows)
 
     @staticmethod
     def describe_domain_records(
