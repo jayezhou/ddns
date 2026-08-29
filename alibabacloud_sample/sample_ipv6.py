@@ -11,12 +11,11 @@ AAAA 记录比对，不一致时更新记录。
 - AccessKey 从环境变量读取（ACCESS_KEY_ID / ACCESS_KEY_SECRET），不硬编码
 """
 import ipaddress
-import re
 import subprocess
 import sys
 
 from Tea.core import TeaCore
-from typing import List
+from typing import List, Optional
 
 from alibabacloud_alidns20150109.client import Client as DnsClient
 from alibabacloud_tea_openapi import models as open_api_models
@@ -51,7 +50,7 @@ class Sample:
         return DnsClient(config)
 
     @staticmethod
-    def normalize_ipv6(value: str) -> str | None:
+    def normalize_ipv6(value: str) -> Optional[str]:
         """
         将 IPv6 地址文本归一化为 RFC5952 压缩格式。
         用于比对，避免本地地址与阿里云存储文本格式不一致时误判"IP 已变化"。
@@ -63,45 +62,45 @@ class Sample:
             return None
 
     @staticmethod
-    def get_local_public_ipv6() -> str | None:
+    def get_local_public_ipv6() -> Optional[str]:
         """
-        从本机网卡读取全局公网 IPv6 地址。
+        从本机网卡读取全局公网 IPv6 地址（跨平台）。
 
-        解析 `ip -6 addr` 输出，仅保留 scope=global 的 inet6 地址，
-        再用 ipaddress.is_global 二次校验，排除回环/链路本地/ULA 等非公网地址。
+        Linux 用 `ip -6 addr`，Windows 用 `netsh interface ipv6 show addresses`。
+        从输出中逐 token 提取 IPv6 地址文本（去掉 /前缀 与 %iface 后缀），
+        再用 ipaddress.is_global 过滤，排除回环/链路本地/ULA 等非公网地址。
         取到任一合法全局地址即返回；读取失败或没有全局地址则返回 None。
         """
+        if sys.platform.startswith('win'):
+            cmd = ['netsh', 'interface', 'ipv6', 'show', 'addresses']
+        else:
+            cmd = ['ip', '-6', 'addr']
         try:
             output = subprocess.run(
-                ['ip', '-6', 'addr'],
+                cmd,
                 capture_output=True,
                 text=True,
+                # netsh 输出编码不一定是 GBK（可能是 UTF-8/OEM 码页），
+                # 用 errors='replace' 容忍不可解码字节，避免 Windows 下解码崩溃
+                errors='replace',
                 timeout=5,
             ).stdout
         except Exception as error:
-            ConsoleClient.log(f'执行 ip -6 addr 失败：{error}')
+            ConsoleClient.log(f'执行 {" ".join(cmd)} 失败：{error}')
             return None
 
-        # 收集所有候选地址（同一行内即可含 scope），再统一过滤
-        candidates = []
         for line in output.splitlines():
-            match = re.match(
-                r"\s+inet6\s+([0-9a-fA-F:]+)/\d+\s+scope\s+(\S+)", line
-            )
-            if match:
-                candidates.append((match.group(1), match.group(2)))
-
-        for addr, scope in candidates:
-            if scope != 'global':
-                continue
-            normalized = Sample.normalize_ipv6(addr)
-            if normalized is None:
-                continue
-            try:
-                if ipaddress.IPv6Address(normalized).is_global:
-                    return normalized
-            except Exception:
-                continue
+            for token in line.split():
+                # 去掉 /prefix 与 %iface 后缀后尝试解析为 IPv6
+                address = token.split('/', 1)[0].split('%', 1)[0]
+                normalized = Sample.normalize_ipv6(address)
+                if normalized is None:
+                    continue
+                try:
+                    if ipaddress.IPv6Address(normalized).is_global:
+                        return normalized
+                except Exception:
+                    continue
         return None
 
     @staticmethod
